@@ -25,8 +25,7 @@ heure_myd = "1430"
 date = f'{annee}{mois:02}{Translation.number_file+1:02}_{heure_mod}_{heure_myd}'
 
 Translation.read_goes()
-Translation.read_modis()
-Translation.pretraitement_goes()
+Translation.preprocessing_goes()
 Translation.lat_lon_data = LatLonData(Translation.fai_mod['latitude'].values,Translation.fai_mod['longitude'].values)
 lat_lon_data = Translation.lat_lon_data
 # Tentative de charger les points existants
