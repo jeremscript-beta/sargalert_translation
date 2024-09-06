@@ -163,7 +163,7 @@ class Modis_Goes_Image_Processor:
             self.combined_mask = combined_mask
             self.combined_mask_done = True
         
-        data = np.where(self.combined_mask == 1, 0, data)
+        data = np.where(self.combined_mask == 1, 0, data) #np.multiply
         return data
         
     
@@ -1789,10 +1789,10 @@ class Modis_Goes_Translation(Modis_Goes_Image_Processor):
                         for i in tqdm(range(10,51)) :
                             #Creation du déplacement i/10 (1 à 5 pixels => 0.09 à 0.48 m/s)
                             
-                            roi_mod_l = fonction_utile.lissage_image(roi_mod,-i/10,0,18)
-                            roi_sarg_mod_l = fonction_utile.lissage_image(roi_sarg_mod,-i/10,0,18)
-                            roi_myd_l = fonction_utile.shift_image(roi_mod_l,-i/10,0)
-                            roi_sarg_myd_l = fonction_utile.shift_image(roi_sarg_mod_l,-i/10,0)
+                            roi_mod_l = fonction_utile.lissage_image(roi_mod,0,i/10,18)
+                            roi_sarg_mod_l = fonction_utile.lissage_image(roi_sarg_mod,0,i/10,18)
+                            roi_myd_l = fonction_utile.shift_image(roi_mod_l,0,i/10)
+                            roi_sarg_myd_l = fonction_utile.shift_image(roi_sarg_mod_l,0,i/10)
                             
                             #Ajout centre
                             # Calculer le centre de la ROI
@@ -1875,8 +1875,8 @@ class Modis_Goes_Translation(Modis_Goes_Image_Processor):
                                 angle_liste_LT_g.append(angle_degrees_LT)
                                 speed_liste_LT_g.append(speed_LT)
                                 
-                            Dx.append([-i/10,dx_mean])
-                            Dy.append([0,dy_mean])
+                            Dx.append([0,dx_mean])
+                            Dy.append([i/10,dy_mean])
                             I.append(i)
                             mean_flow_x, mean_flow_y = (mean_flow_x/self.delta_t)/3.6, (mean_flow_y/self.delta_t)/3.6
                             dx_mean,dy_mean = (dx_mean/self.delta_t)/3.6, (dy_mean/self.delta_t)/3.6
