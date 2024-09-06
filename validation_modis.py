@@ -7,15 +7,15 @@ from openpyxl import load_workbook
 from classes_drift import Modis_Goes_Translation , LatLonData
 import fonction_utile
 
-# Chemin vers le fichier Excel contenant les données existantes
-excel_path = r"C:\Users\DELL\Desktop\Jupyter\Projet_Sargalert\Notebooks\points_info_modis.xlsx"  # Remplacez par le chemin réel du fichier
+# Chemin vers le fichier Excel contenant les donnÃ©es existantes
+excel_path = r"C:\Users\DELL\Desktop\Jupyter\Projet_Sargalert\Notebooks\points_info_modis.xlsx"  # Remplacez par le chemin rÃ©el du fichier
 
 # Initialize an instance of OpticalFlowTracker
 Translation = Modis_Goes_Translation()
 
 # Supposons que vous travaillez sur la date5 (index 5)
 Translation.number_file = 2
-# Année et mois d'étude
+# AnnÃ©e et mois d'Ã©tude
 angle_threshold = 25
 speed_threshold = 0.2
 matches_threshold = 2
@@ -26,10 +26,7 @@ heure_myd = "1430"
 date = f'{annee}{mois:02}{Translation.number_file+1:02}_{heure_mod}_{heure_myd}'
 
 Translation.read_modis()
-Translation.preprocess_image_with_square_se()
-Translation.intersect_images()
-Translation.find_sargassum_polygons()
-Translation.chargement_numpy()
+Translation.preprocessing_modis()
 Translation.lat_lon_data = LatLonData(Translation.afai_mod['latitude'].values,Translation.afai_mod['longitude'].values)
 lat_lon_data = Translation.lat_lon_data
 # Tentative de charger les points existants
@@ -65,7 +62,7 @@ for i, region in enumerate(regions):
     selection_finished = False
     # ============= Calcul du flux optique et linear_translation pour la ROI=======
     flow = Translation.calculate_optical_flow_region(roi_mod, roi_myd)
-    # Calcul de la linear translation pour la même ROI
+    # Calcul de la linear translation pour la mÃªme ROI
     matches, nb_matches = Translation.calculate_linear_translation_region(roi_mod, roi_sarg_mod, roi_myd, roi_sarg_myd)
     #Filtrage Optical Flow pour ne garder que les points clefs pour le flux optique
     flow_masked = fonction_utile.filter_optical_flow_with_keypoints(flow, matches)
@@ -107,7 +104,7 @@ for i, region in enumerate(regions):
             ax2.set_title('Cliquez sur roi_myd')
         
             ax_button = plt.axes([0.45, 0.01, 0.1, 0.05])
-            button = Button(ax_button, 'Finir la sélection')
+            button = Button(ax_button, 'Finir la sÃ©lection')
             button.on_clicked(finish_selection)
         
             fig.canvas.mpl_connect('button_press_event', lambda event: onclick(event, liste_roi_mod, ax1, "red"))
@@ -131,7 +128,7 @@ for i, region in enumerate(regions):
                 regional_vector_list_LT.append((dx_mean, dy_mean , centre_mod , centre_myd))
             print(f"Processed region {i}: {len(liste_roi_mod)} MOD points, {len(liste_roi_myd)} MYD points.")
 
-# Création des nouvelles données à ajouter au fichier Excel
+# CrÃ©ation des nouvelles donnÃ©es Ã  ajouter au fichier Excel
 new_data = []
 for (mod_points, myd_points),(mean_flow_x, mean_flow_y , centre_mod , centre_myd),(dx_mean, dy_mean ,centre_mod , centre_myd) in zip(points_info,regional_vector_list_OF,regional_vector_list_LT):
     
@@ -148,10 +145,10 @@ for (mod_points, myd_points),(mean_flow_x, mean_flow_y , centre_mod , centre_myd
     new_data.append([date, Mod_Lat_m, Mod_Lon_m, Myd_Lat_m, Myd_Lon_m, u, v,Mod_Lat, Mod_Lon, Myd_Lat, Myd_Lon,u_OF,v_OF,u_LT,v_LT])
 df_new = pd.DataFrame(new_data, columns=['Date', 'Mod_Lat_m', 'Mod_Lon_m', 'Myd_Lat_m', 'Myd_Lon_m', 'u_m', 'v_m','Mod_Lat', 'Mod_Lon', 'Myd_Lat', 'Myd_Lon',"u_OF","v_OF","u_LT","v_LT"])
 
-# Fusionner les nouvelles données avec les données existantes
+# Fusionner les nouvelles donnÃ©es avec les donnÃ©es existantes
 df_combined = pd.concat([df_existing, df_new], ignore_index=True)
 
-# Écriture des données combinées dans le fichier Excel
+# Ã‰criture des donnÃ©es combinÃ©es dans le fichier Excel
 with pd.ExcelWriter(excel_path, engine='openpyxl', mode='w') as writer:
     df_combined.to_excel(writer, sheet_name='All_Data', index=False)
 
