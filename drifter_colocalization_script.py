@@ -1,4 +1,4 @@
-import pandas as pd 
+import pandas as pd
 from datetime import datetime, timedelta
 from geopy.distance import geodesic
 import matplotlib.pyplot as plt
@@ -6,13 +6,20 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from fpdf import FPDF
 import numpy as np
+import pygrib
+from scipy.interpolate import griddata
 
-# Load data
+# Paths to your data files
 points_info_path = r'C:\Users\Utilisateur\Desktop\image_rapport\points_info.xlsx'
 drifter_data_path = r"C:\Users\Utilisateur\Downloads\drifter_6hour_2022.csv"
-# Output path
 output_path = r'C:\Users\Utilisateur\Desktop\image_rapport\points_info_drifter.xlsx'
+grib_file_path = r"C:\Users\Utilisateur\Downloads\wind_model.grib"
 
+drifter_speed = True  # Set this flag to control the velocity source
+# If drifter_speed = True, speed will be taken from the drifter CSV column,
+# else it will be deduced from the position at t-1 and t+1.
+
+# Load points_info and drifter data
 points_info = pd.read_excel(points_info_path)
 drifter_data = pd.read_csv(drifter_data_path)
 
@@ -23,154 +30,218 @@ points_info = points_info[points_info['Date'].str.startswith('202205')]
 drifter_data['time'] = pd.to_datetime(drifter_data['time'], format='%Y-%m-%dT%H:%M:%SZ', errors='coerce')
 drifter_data_may = drifter_data[(drifter_data['time'] >= '2022-05-01') & (drifter_data['time'] < '2022-06-01')]
 
-def check_drifter_colocalization(points_info_row, drifter_data, max_time_diff=timedelta(hours=6), max_distance_km=50):
-    # Extract time and coordinates from points_info
-    point_time_str = points_info_row['Date'][:8]  # Extracting the date part YYYYMMDD
-    mod_time_str = points_info_row['Date'][9:13]  # Extracting MOD time (HHMM)
-    myd_time_str = points_info_row['Date'][14:18]  # Extracting MYD time (HHMM)
+# Wind interpolation - open GRIB file and extract wind data
+grib_data = pygrib.open(grib_file_path)
+grib_u_wind, grib_v_wind = [], []
+latitudes, longitudes = None, None
 
-    # Convert mod and myd times to datetime objects
+# Extract GRIB data for wind components
+for message in grib_data:
+    if 'U wind component' in message.parameterName:
+        if latitudes is None and longitudes is None:
+            latitudes, longitudes = message.latlons()  # Extract lat/lon grid
+        grib_u_wind.append((message.validDate, message.values))
+    elif 'V wind component' in message.parameterName:
+        grib_v_wind.append((message.validDate, message.values))
+
+grib_data.close()  # Close the GRIB file after extraction
+
+# Function to interpolate wind data at specific lat/lon points
+def interpolate_wind(grib_wind_data, lats, lons, point_lat, point_lon, time_diff_func):
+    time_diffs = np.array([time_diff_func(t) for t, _ in grib_wind_data])
+    before_indices = np.where(time_diffs <= 0)[0]
+    after_indices = np.where(time_diffs >= 0)[0]
+    
+    if before_indices.size == 0 or after_indices.size == 0:
+        # Cannot interpolate if we don't have both before and after times
+        return np.nan
+    
+    before_idx = before_indices[-1]
+    after_idx = after_indices[0]
+    
+    # Bilinear interpolation for the "before" and "after" wind grids
+    u_before = griddata(
+        (lats.flatten(), lons.flatten()), grib_wind_data[before_idx][1].flatten(),
+        (point_lat, point_lon), method='linear'
+    )
+    u_after = griddata(
+        (lats.flatten(), lons.flatten()), grib_wind_data[after_idx][1].flatten(),
+        (point_lat, point_lon), method='linear'
+    )
+    
+    # Time interpolation
+    total_time_diff = time_diffs[after_idx] - time_diffs[before_idx]
+    if total_time_diff == 0:
+        return u_before  # Times are the same
+    weight = -time_diffs[before_idx] / total_time_diff
+    return u_before * (1 - weight) + u_after * weight
+
+# Step to check drifter colocalization
+def check_drifter_colocalization(points_info_row, drifter_data, max_time_diff=timedelta(hours=6), max_distance_km=50):
+    point_time_str = points_info_row['Date'][:8]
+    mod_time_str = points_info_row['Date'][9:13]
+    myd_time_str = points_info_row['Date'][14:18]
     mod_time = datetime.strptime(point_time_str + mod_time_str, '%Y%m%d%H%M')
     myd_time = datetime.strptime(point_time_str + myd_time_str, '%Y%m%d%H%M')
-
-    # Calculate the mean (average) time between mod and myd
-    image_time = mod_time + (myd_time - mod_time) / 2  # Mean time between MOD and MYD
-    
+    image_time = mod_time + (myd_time - mod_time) / 2
     point_coordinates = (points_info_row['Mod_Lat'], points_info_row['Mod_Lon'])
-
-    # Initialize variables to track the closest match
     best_match = None
-    best_distance = float('inf')  # Set to a very large number initially
+    best_distance = float('inf')
     
-    # Loop through drifter_data to find a match
-    for index, drifter_row in drifter_data.iterrows():
+    for _, drifter_row in drifter_data.iterrows():
         drifter_time = drifter_row['time']
         if pd.isnull(drifter_time):
-            continue  # Skip rows where time could not be parsed
-        
-        # Parse drifter coordinates
+            continue
         drifter_coordinates = (drifter_row['latitude'], drifter_row['longitude'])
-        
-        # Calculate time difference
         time_difference = abs(image_time - drifter_time)
-        delta_t_hours = time_difference.total_seconds() / 60 # Time difference in hours
-        
-        # Calculate geographic distance
+        delta_t_min = time_difference.total_seconds() / 60  # Time difference in min
         distance = geodesic(point_coordinates, drifter_coordinates).km
         
-        # Check if time difference and distance are within the threshold
         if time_difference <= max_time_diff and distance <= max_distance_km:
             drogue_lost_date = drifter_row.get('drogue_lost_date', None)
-            drogue = 1  # Default assumption: drifter still has drogue
+            drogue = 1
             if pd.notnull(drogue_lost_date):
                 drogue_lost_time = pd.to_datetime(drogue_lost_date, format='%Y-%m-%d', errors='coerce')
-                # Check if the drogue was lost before or after the drifter_time
                 if drogue_lost_time <= drifter_time:
-                    drogue = 0  # The drifter lost its drogue
-            
-            # If this match is closer than the previous best, update best match
+                    drogue = 0
             if distance < best_distance:
                 best_distance = distance
                 best_match = {
                     'drifter_id': drifter_row['ID'],
                     'drifter_info': drifter_row,
                     'point_info': points_info_row,
-                    'distance': distance,  # Store the calculated distance
-                    'delta_t': delta_t_hours,  # Time difference between satellite and drifter data
-                    'drogue': drogue,  # Store drogue status: 1 = still has it, 0 = lost
-                    'image_time': image_time  # Store the image time for velocity calculation
+                    'distance': distance,
+                    'delta_t': delta_t_min,
+                    'drogue': drogue,
+                    'image_time': image_time
                 }
     
-    # Return the best match (if any)
     if best_match:
-        return [best_match]  # Return as a list for consistency
+        return [best_match]
     return []
 
-def calculate_drifter_velocity(drifter_id, match_time, image_time):
-    if image_time > match_time:
-        # If the image time is greater, we use match_time and time_after
-        time_start = match_time
-        time_end = match_time + timedelta(hours=6)
+# Velocity calculation
+def calculate_drifter_velocity(drifter_id, match_time, image_time, drifter_row):
+    if drifter_speed:
+        u_drifter = drifter_row['ve']
+        v_drifter = drifter_row['vn']
+        if pd.isna(u_drifter) or pd.isna(v_drifter):
+            return None, None, None, None
+        lat_start, lon_start = drifter_row['latitude'], drifter_row['longitude']
+        lat_end, lon_end = lat_start, lon_start
     else:
-        # If the image time is smaller, we use match_time and time_before
-        time_start = match_time - timedelta(hours=6)
-        time_end = match_time
-
-    # Find the rows corresponding to start and end times
-    drifter_start = drifter_data_may[(drifter_data_may['ID'] == drifter_id) & (drifter_data_may['time'] == time_start)]
-    drifter_end = drifter_data_may[(drifter_data_may['ID'] == drifter_id) & (drifter_data_may['time'] == time_end)]
-
-    if drifter_start.empty or drifter_end.empty:
-        return None, None, None, None  # Return None if data is missing for any of the time points
-    
-    # Extract positions and convert to floats
-    lat_start, lon_start = float(drifter_start.iloc[0]['latitude']), float(drifter_start.iloc[0]['longitude'])
-    lat_end, lon_end = float(drifter_end.iloc[0]['latitude']), float(drifter_end.iloc[0]['longitude'])
-    
-    # Calculate East-West (longitude) and North-South (latitude) distances
-    u_distance = geodesic((lat_start, lon_start), (lat_start, lon_end)).meters  # Longitude difference
-    v_distance = geodesic((lat_start, lon_start), (lat_end, lon_start)).meters  # Latitude difference
-    
-    # Adjust the sign based on the direction of movement
-    if lon_end < lon_start:
-        u_distance = -u_distance  # Moving west
-    if lat_end < lat_start:
-        v_distance = -v_distance  # Moving south
-    
-    # Time difference in seconds
-    time_in_seconds = 6 * 3600  # 6 hours = 21,600 seconds
-    
-    # Calculate velocity (in m/s)
-    u_drifter = u_distance / time_in_seconds
-    v_drifter = v_distance / time_in_seconds
-
-    # Return the start and end points along with the calculated velocity
+        if image_time > match_time:
+            time_start = match_time
+            time_end = match_time + timedelta(hours=6)
+        else:
+            time_start = match_time - timedelta(hours=6)
+            time_end = match_time
+        drifter_start = drifter_data_may[(drifter_data_may['ID'] == drifter_id) & (drifter_data_may['time'] == time_start)]
+        drifter_end = drifter_data_may[(drifter_data_may['ID'] == drifter_id) & (drifter_data_may['time'] == time_end)]
+        if drifter_start.empty or drifter_end.empty:
+            return None, None, None, None
+        lat_start, lon_start = float(drifter_start.iloc[0]['latitude']), float(drifter_start.iloc[0]['longitude'])
+        lat_end, lon_end = float(drifter_end.iloc[0]['latitude']), float(drifter_end.iloc[0]['longitude'])
+        u_distance = geodesic((lat_start, lon_start), (lat_start, lon_end)).meters
+        v_distance = geodesic((lat_start, lon_start), (lat_end, lon_start)).meters
+        if lon_end < lon_start:
+            u_distance = -u_distance
+        if lat_end < lat_start:
+            v_distance = -v_distance
+        time_in_seconds = 6 * 3600
+        u_drifter = u_distance / time_in_seconds
+        v_drifter = v_distance / time_in_seconds
     return u_drifter, v_drifter, (lat_start, lon_start), (lat_end, lon_end)
-
 
 # Initialize a list to store the new results
 points_info_drifter = []
 
 # Process matches and calculate drifter velocities and errors
-for i in range(len(points_info)):  # Iterate over points_info
+for i in range(len(points_info)):
     for match in check_drifter_colocalization(points_info.iloc[i], drifter_data_may):
-        drifter_id = match['drifter_info']['ID']  # Extract drifter ID from drifter_info
+        drifter_id = match['drifter_info']['ID']
         match_time = match['drifter_info']['time']
-        image_time = match['image_time']  # Extract the image_time from match
+        image_time = match['image_time']
         
-        # Calculate drifter velocity based on the image_time and match_time
-        u_drifter, v_drifter, drifter_start, drifter_end = calculate_drifter_velocity(drifter_id, match_time, image_time)
-        
+        # Calculate drifter velocity
+        u_drifter, v_drifter, drifter_start, drifter_end = calculate_drifter_velocity(drifter_id, match_time, image_time, match['drifter_info'])
+
         if u_drifter is not None and v_drifter is not None:
-            # Extract LT results from points_info
             u_LT = match['point_info']['u_LT']
             v_LT = match['point_info']['v_LT']
             
-            # Combine match data with new drifter velocity data and errors
+            # Interpolate wind data at the drifter location
+            drifter_lat, drifter_lon = drifter_start
+            drifter_time = pd.to_datetime(match['point_info']['Date'][:8], format='%Y%m%d')
+            time_diff_func = lambda t: (t - drifter_time).total_seconds()
+            u_wind_model = interpolate_wind(grib_u_wind, latitudes, longitudes, drifter_lat, drifter_lon, time_diff_func)
+            v_wind_model = interpolate_wind(grib_v_wind, latitudes, longitudes, drifter_lat, drifter_lon, time_diff_func)
+            
+            # Combine match data with new drifter velocity data and interpolated wind data
             result = match['point_info'].copy()
             result['u_drifter'] = u_drifter
             result['v_drifter'] = v_drifter
-            result['distance'] = match['distance']  # Distance between drifter and point
-            result['delta_t'] = match['delta_t']  # Time difference between satellite and drifter data
-            result['drogue'] = match['drogue']  # Drogue status
-            result['drifter_id'] = drifter_id  # Add drifter_id
-            result['drifter_start_lat'], result['drifter_start_lon'] = drifter_start  # Add drifter start coordinates
-            result['drifter_end_lat'], result['drifter_end_lon'] = drifter_end  # Add drifter end coordinates
+            result['distance'] = match['distance']
+            result['delta_t'] = match['delta_t']
+            result['drogue'] = match['drogue']
+            result['drifter_id'] = drifter_id
+            result['drifter_start_lat'], result['drifter_start_lon'] = drifter_start
+            result['drifter_end_lat'], result['drifter_end_lon'] = drifter_end
+            result['u_wind_model'] = u_wind_model
+            result['v_wind_model'] = v_wind_model
             points_info_drifter.append(result)
 
 # Convert the results to a DataFrame
 points_info_drifter_df = pd.DataFrame(points_info_drifter)
 
-# Save to Excel
-points_info_drifter_df.to_excel(output_path, index=False)
+# Add units for each variable as the first row
+units = {
+    'Date': 'YYYYMMDD_hmod_hmyd',  # Example format for the date
+    'Mod_Lat': 'degrees', 
+    'Mod_Lon': 'degrees', 
+    'Myd_Lat': 'degrees', 
+    'Myd_Lon': 'degrees', 
+    'u_LT': 'm/s',  # Eastward velocity (m/s)
+    'v_LT': 'm/s',  # Northward velocity (m/s)
+    'u_OF': 'm/s',  # Eastward velocity (m/s)
+    'v_OF': 'm/s',
+    'u_drifter': 'm/s',  # Drifter eastward velocity (m/s)
+    'v_drifter': 'm/s',  # Drifter northward velocity (m/s)
+    'distance': 'km',  # Distance between drifter and point (km)
+    'delta_t': 'min',  # Time difference between satellite and drifter data (hours)
+    'drogue': '1 = has drogue, 0 = lost drogue',
+    'drifter_id': 'ID',  # ID of the drifter
+    'drifter_start_lat': 'degrees', 
+    'drifter_start_lon': 'degrees', 
+    'drifter_end_lat': 'degrees', 
+    'drifter_end_lon': 'degrees',
+    'u_wind_model': 'm/s',  # Wind model eastward velocity (m/s)
+    'v_wind_model': 'm/s',  # Wind model northward velocity (m/s)
+    'Sat': 'sensor', 
+}
 
-print(f"Results saved to {output_path}")
+# Convert the units dictionary into a DataFrame
+units_df = pd.DataFrame([units])
+
+# Concatenate the units row with the actual data
+points_info_drifter_with_units = pd.concat([units_df, points_info_drifter_df], ignore_index=True)
+
+# Save the new DataFrame with units row to Excel
+points_info_drifter_with_units.to_excel(output_path, index=False)
+
+print(f"Excel file with units saved to {output_path}")
 
 # Function to plot vectors on a geographical map with dynamic borders and proper scale vector placement
-def plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drifter, u_LT, v_LT, drifter_id, save_path, title):
+def plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drifter, u_LT, v_LT, u_wind_model, v_wind_model, drifter_id, save_path, title):
     lat_start, lon_start = drifter_start
     lat_end, lon_end = drifter_end
-
+    
+    # Convert coordinates to floats (if they are strings)
+    lat_start = float(lat_start)
+    lon_start = float(lon_start)
+    lat_end = float(lat_end)
+    lon_end = float(lon_end)
+    
     # Calculate the barycenter of the two drifter points
     barycenter_lat = (lat_start + lat_end) / 2
     barycenter_lon = (lon_start + lon_end) / 2
@@ -202,7 +273,7 @@ def plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drif
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.1f}°'))
 
     # Plot the drifter points
-    ax.scatter([lon_start, lon_end], [lat_start, lat_end], color='purple', label='Drifter Points',s=8)
+    ax.scatter([lon_start, lon_end], [lat_start, lat_end], color='purple', label='Drifter Points', s=8)
 
     # Plot the drifter velocity vector at the barycenter
     ax.quiver(barycenter_lon, barycenter_lat, u_drifter, v_drifter, color='blue', scale=1, scale_units='inches', label='Drifter')
@@ -210,6 +281,9 @@ def plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drif
     # Plot the LT vector at the MOD image location
     ax.quiver(mod_lon, mod_lat, u_LT, v_LT, color='red', scale=1, scale_units='inches', label='LT')
     
+    # Plot the wind model vector at the drifter location
+    ax.quiver(drifter_start[1], drifter_start[0], u_wind_model, v_wind_model, color='green', scale=1, scale_units='inches', label='Wind Model')
+
     # Add a scale vector (0.25 m/s) in the bottom-left corner
     scale_lon = lon_min + 0.05
     scale_lat = lat_min + 0.05
@@ -222,9 +296,10 @@ def plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drif
     # Plot a grid and set aspect ratio
     ax.grid(True)
 
-    # Below the plot, add numerical values for LT and drifter vectors
+    # Below the plot, add numerical values for LT, drifter, and wind model vectors
     plt.figtext(0.1, -0.05, f'LT Vector (u, v): ({u_LT:.4f}, {v_LT:.4f})', fontsize=10, color='red', ha='left')
     plt.figtext(0.1, -0.1, f'Drifter Vector (u, v): ({u_drifter:.4f}, {v_drifter:.4f})', fontsize=10, color='blue', ha='left')
+    plt.figtext(0.1, -0.15, f'Wind Model Vector (u, v): ({u_wind_model:.4f}, {v_wind_model:.4f})', fontsize=10, color='green', ha='left')
     
     # Save the figure as a PNG file
     plt.savefig(save_path, format='png', bbox_inches='tight')
@@ -234,7 +309,7 @@ def plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drif
 plot_paths = []
 
 # Process matches and create geographical plots
-for i, match in enumerate(points_info_drifter):
+for i, match in enumerate(points_info_drifter_df.to_dict('records')):
     mod_lat = match['Mod_Lat']
     mod_lon = match['Mod_Lon']
     drifter_start = (match['drifter_start_lat'], match['drifter_start_lon'])
@@ -243,6 +318,8 @@ for i, match in enumerate(points_info_drifter):
     v_drifter = match['v_drifter']
     u_LT = match['u_LT']
     v_LT = match['v_LT']
+    u_wind_model = match['u_wind_model']
+    v_wind_model = match['v_wind_model']
     
     # Ensure 'drifter_id' is available in match
     drifter_id = match.get('drifter_id', 'Unknown')  # Use 'Unknown' if the key 'drifter_id' doesn't exist
@@ -251,7 +328,12 @@ for i, match in enumerate(points_info_drifter):
     plot_path = f'plot_{i}.png'
     
     # Call the plot function with modifications, including drifter ID
-    plot_vectors(mod_lat, mod_lon, drifter_start, drifter_end, u_drifter, v_drifter, u_LT, v_LT, drifter_id, plot_path, f"Match {i+1}: {match['Date']}")
+    plot_vectors(
+        mod_lat, mod_lon, drifter_start, drifter_end,
+        u_drifter, v_drifter, u_LT, v_LT,
+        u_wind_model, v_wind_model, drifter_id,
+        plot_path, f"Match {i+1}: {match['Date']}"
+    )
     
     # Append the path to the list
     plot_paths.append(plot_path)
