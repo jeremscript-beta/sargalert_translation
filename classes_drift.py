@@ -862,16 +862,16 @@ class Modis_Goes_Translation(Modis_Goes_Image_Processor):
                     if write : 
                         lat_lon_data = LatLonData(self.fai_mod['latitude'].values,self.fai_mod['longitude'].values)
                         date = self.date_goes1
-                        centre_mod = fonction_utile.calculate_barycenter(matches[0])
+                        centre_mod = fonction_utile.calculate_barycenter([pt_src for pt_src, _ in matches])
                         centre_mod = (centre_mod[0] + minc, centre_mod[1] + minr)
-                        centre_myd = fonction_utile.calculate_barycenter(matches[1])
+                        centre_myd = fonction_utile.calculate_barycenter([pt_dst for _, pt_dst in matches])
                         centre_myd = (centre_myd[0] + minc, centre_myd[1] + minr)
                         Mod_Lat, Mod_Lon = lat_lon_data.get_lat_lon_coordinates(centre_mod[1],centre_mod[0])
                         Myd_Lat, Myd_Lon = lat_lon_data.get_lat_lon_coordinates(centre_myd[1],centre_myd[0])
                         u_OF = mean_flow_x
                         v_OF = mean_flow_y
                         u_LT = dx_mean
-                        v_LT = dy_mean
+                        v_LT = dy_mean * (-1)
                         sat = "Goes"
                         if not is_data_existing(date, sat, Mod_Lat, Mod_Lon, df_existing) :
                             new_data.append([date,Mod_Lat, Mod_Lon, Myd_Lat, Myd_Lon,u_OF,v_OF,u_LT,v_LT,sat])
@@ -990,16 +990,16 @@ class Modis_Goes_Translation(Modis_Goes_Image_Processor):
                     if write : 
                         lat_lon_data = LatLonData(self.fai_mod['latitude'].values,self.fai_mod['longitude'].values)
                         date = self.date_goes2
-                        centre_mod = fonction_utile.calculate_barycenter(matches[0])
+                        centre_mod = fonction_utile.calculate_barycenter([pt_src for pt_src, _ in matches])
                         centre_mod = (centre_mod[0] + minc, centre_mod[1] + minr)
-                        centre_myd = fonction_utile.calculate_barycenter(matches[1])
+                        centre_myd = fonction_utile.calculate_barycenter([pt_dst for _, pt_dst in matches])
                         centre_myd = (centre_myd[0] + minc, centre_myd[1] + minr)
                         Mod_Lat, Mod_Lon = lat_lon_data.get_lat_lon_coordinates(centre_mod[1],centre_mod[0])
                         Myd_Lat, Myd_Lon = lat_lon_data.get_lat_lon_coordinates(centre_myd[1],centre_myd[0])
                         u_OF = mean_flow_x
                         v_OF = mean_flow_y
                         u_LT = dx_mean
-                        v_LT = dy_mean
+                        v_LT = dy_mean * (-1)
                         sat = "Goes"
                         if not is_data_existing(date, sat, Mod_Lat, Mod_Lon, df_existing) :
                             new_data.append([date,Mod_Lat, Mod_Lon, Myd_Lat, Myd_Lon,u_OF,v_OF,u_LT,v_LT,sat])
@@ -1142,9 +1142,9 @@ class Modis_Goes_Translation(Modis_Goes_Image_Processor):
                     if write : 
                         lat_lon_data = LatLonData(self.afai_mod['latitude'].values,self.afai_mod['longitude'].values)
                         date = self.date_modis
-                        centre_mod = fonction_utile.calculate_barycenter(matches[0])
+                        centre_mod = fonction_utile.calculate_barycenter([pt_src for pt_src, _ in matches])
                         centre_mod = (centre_mod[0] + minc, centre_mod[1] + minr)
-                        centre_myd = fonction_utile.calculate_barycenter(matches[1])
+                        centre_myd = fonction_utile.calculate_barycenter([pt_dst for _, pt_dst in matches])
                         centre_myd = (centre_myd[0] + minc, centre_myd[1] + minr)
                         Mod_Lat, Mod_Lon = lat_lon_data.get_lat_lon_coordinates(centre_mod[1],centre_mod[0])
                         Myd_Lat, Myd_Lon = lat_lon_data.get_lat_lon_coordinates(centre_myd[1],centre_myd[0])
